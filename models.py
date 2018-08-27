@@ -1,7 +1,9 @@
-import re
 import ipaddress
+import re
+
 from mongoengine import connect
-from storage_models import NetworkEntry, ADDRESS, NETWORK
+
+from storage_models import NetworkEntry, NETWORK
 
 
 class Hive:
@@ -22,6 +24,7 @@ class Hive:
             get_supernet(network_address): pass
             get_children(network_address): pass
     """
+
     def __init__(self, host, db="network_storage"):
         self.host = host
         self.db = db
@@ -29,7 +32,50 @@ class Hive:
     def __init_hive__(self):
         # Init first connection and choose database name
         self.conn = connect(self.host, database=self.db)
-        pass
+
+    @staticmethod
+    def _validate(net_data):
+        """
+        # A function to check if supplied net_data meets model's requirement. Thus net_data must be a dict with
+        specified fields
+
+        Examples of net_data:
+            net_data1 = {
+                        "value": "192.168.34.4",
+                        "type": "host"
+                        }
+
+            net_data2 = {
+                        "value": "192.168.34.0/24",
+                        "type": "network"
+                        }
+
+            net_data3 = {
+                        "value": "192.168.34.4",
+                        "type": "host",
+                        "os": "Linux",
+                        "ports": [21, 22, 80 ,443]
+                        }
+
+
+        :param net_data: a dict with specified fields .
+        :return: True if net_data has required fields and they are in valid formats otherwise False.
+        """
+
+        # These fields must be in supplied net_data
+        required_fields = ['value', 'type']
+        # Extra fields are needed to just help remember what fields can be there in applied data
+        extra_fields = ['os', 'ports', 'users', 'supernet']
+
+        # Supplied data must be in dictionary form
+        if not isinstance(net_data, dict):
+            return False
+
+        # Check whether supplied dictionary has all required fields
+        if not all(field in net_data for field in required_fields):
+            return False
+
+        return True
 
     @staticmethod
     def is_addr(addr):
@@ -80,6 +126,19 @@ class Hive:
 
         return foo.overlaps(bar)
 
+    def is_added(self, net):
+        """
+            Checks if supplied net (can be both network or host address in CIDR format) is added to hive.
+
+        :param net:  A string in CIDR format (only IPv4).
+        :return: True of False whether a net exists in hive.
+        """
+        if any(x(net) for x in [self.is_network, self.is_addr]):
+            net = NetworkEntry.objects(value=net)
+            return bool(net)
+        else:
+            ValueError('A supplied network is not in a valid format.')
+
     def add_network(self, net_data: str):
         """
             Add supplied network data as a NetworkEntry into storage. net_data can be a string with network address
@@ -100,36 +159,16 @@ class Hive:
         :return: True if a network was inserted successfully otherwise False.
         """
 
-        def validate(*args):
-            # A function to check if supplied net_data meets model's requirement
-            # These fields must be in supplied net_data
-            required_fields = ['value','type']
-            # Extra fields are needed to just help remember what fields can be there in applied data
-            extra_fields = []
-
-            # Supplied data must be in dictionary form
-            if not isinstance(net_data, dict):
-                return False
-
-            # Check whether supplied dictionary has all required fields
-            if not all(field in required_fields for field in net_data):
-                return False
-
-            return True
-
-        if not validate(net_data):
-            if not self.is_network(net_data):
-                return False
-            else:
-                net = NetworkEntry(value=net_data,type=NETWORK)
+        if not self._validate(net_data):
+            if self.is_network(net_data):
+                net = NetworkEntry(value=net_data, type=NETWORK)
                 net.save()
-
-                return True
-
-        # Provide arguments as **kwargs key-value pairs
-        net = NetworkEntry(**net_data)
-        net.save()
-
+            else:
+                raise ValueError('A supplied net_data is not in a valid format.')
+        else:
+            # Provide arguments as **kwargs key-value pairs
+            net = NetworkEntry(**net_data)
+            net.save()
         return True
 
     def add_host(self, host_data: str):
@@ -151,24 +190,7 @@ class Hive:
                 :return: True if a host was inserted successfully otherwise False.
                 """
 
-        def validate(*args):
-            # A function to check if supplied net_data meets model's requirement
-            # These fields must be in supplied net_data
-            required_fields = ['value', 'type']
-            # Extra fields are needed to just help remember what fields can be there in applied data
-            extra_fields = []
-
-            # Supplied data must be in dictionary form
-            if not isinstance(host_data, dict):
-                return False
-
-            # Check whether supplied dictionary has all required fields
-            if not all(field in required_fields for field in host_data):
-                return False
-
-            return True
-
-        if not validate(host_data):
+        if not self._validate(host_data):
             if not self.is_addr(host_data):
                 return False
             else:
@@ -183,17 +205,6 @@ class Hive:
 
         return True
 
-    def is_added(self, net):
-        """
-            Checks if supplied net (can be both network or host address in CIDR format) is added to hive.
-        :param net:
-        :return:
-        """
-        if any(x(net) for x in [self.is_network, self.is_addr]):
-            net = NetworkEntry.objects(value=net)
-
-            return bool(net)
-
     def add_child_to_net(self, net, *args):
         """
             Allows to add a list of children for given net. A list must be strings in CIDR format (IPv4 only).
@@ -205,7 +216,6 @@ class Hive:
         :param net: A string in CIDR format (only IPv4) to add children networks to.
         :param args: A list of strings in CIDR format (only IPV4) to describe children's network values.
         :return: True if children were successfully appended to net's children list.
-        Return False if there is not a given net in hive or all of children's values are not correct network address.
         """
 
         net = NetworkEntry.objects(value=net).first()
@@ -215,9 +225,11 @@ class Hive:
             for child in args:
                 if any(x(child) for x in [self.is_network, ]):
                     # Check if the child is added to MongoDB.
-                    # Otherwise, create a new NetworkEntry
+                    # Otherwise, throw exception
                     if not self.is_added(child):
-                        NetworkEntry(value=child, type=NETWORK).save()
+                        raise ValueError('A child network is not added to the hive before assignment to a supernet.')
+
+                    # Need to use .first because <>.objects() returns a cursor, not an object
                     child_entry = NetworkEntry.objects(value=child).first()
 
                     # Check if the child is already set in children array
@@ -225,7 +237,9 @@ class Hive:
                         net.children.append(child_entry)
                         net.save()
                     return True
-        return False
+                else:
+                    raise ValueError('A supplied child network is not in a valid format.')
+        raise ValueError('A supernet is not found in the hive.')
 
     def set_supernet(self, net, supernet):
         """
@@ -279,3 +293,93 @@ class Hive:
 
         return list(child.value for child in children)
 
+
+class Aggregator():
+    """ This class and the whole logic are based on
+            https://github.com/grelleum/supernets.git
+
+        Thank you, Grem Mueller @grlleum for such good aggregation algorithm!
+    """
+
+    def __init__(self):
+        self.max_supernet_prefix = 0
+        self._networks = {}
+        self._prefixes = {}
+
+    def _add_network(self,network):
+        """ Adds network(s) to the global networks dictionary.
+        Since network is a key value, duplicates are inherently removed.
+        """
+
+        def add_network_to_prefixes(network):
+            """ Adds networks to the prefix dictionary.
+            The prefix dictionary is keyed by prefixes.
+            Networks of the same prefix length are stored in a list.
+            """
+            prefixes = self._prefixes
+            prefix = network.prefixlen
+            if not prefixes.get(prefix,None):
+                #Prepare list to safely appent
+                prefixes[prefix] = []
+            prefixes[prefix].append(network)
+
+
+        networks = self._networks
+        if network not in networks:
+            networks[network] = network.prefixlen
+            add_network_to_prefixes(network)
+
+    def _delete_network(self,*args):
+        """Removes one of more networks from the global networks dictionary."""
+        networks = self._networks
+        for network in args:
+            networks.pop(network, None)
+
+    def _prepare_input(self,argv):
+
+        for line in argv:
+            network = ipaddress.ip_network(line, strict = False)
+            self._add_network(network)
+
+    def _compare_networks_of_same_prefix_length(self,prefix_list):
+
+        def find_existing_supernet(network):
+            """ This function checks if a subnet is part a of an existing supernet."""
+            result = None
+            for prefix in range(network.prefixlen - 1, 0, -1):
+                super_network = network.supernet(new_prefix=prefix)
+                if super_network in self._networks:
+                    result = super_network
+                    break
+            return result
+
+        previous_net = None
+        for current_net in prefix_list:
+            existing_supernet = find_existing_supernet(current_net)
+            if existing_supernet:
+                self._delete_network(current_net)
+            elif previous_net is None:
+                previous_net = current_net
+            else:
+                # Calculate a one bit larger subet and see if they are the same.
+                supernet1 = previous_net.supernet(prefixlen_diff=1)
+                supernet2 = current_net.supernet(prefixlen_diff=1)
+                if supernet1 == supernet2:
+                    self._add_network(supernet1)
+                    self._delete_network(previous_net, current_net)
+                    previous_net = None
+                else:
+                    previous_net = current_net
+
+    def _process_prefixes(self,prefix=0):
+        """Read each list of networks starting with the largest prefixes."""
+        prefixes = self._prefixes
+
+        for x in range(128, prefix, -1):
+            if x in prefixes:
+                self._compare_networks_of_same_prefix_length(sorted(prefixes[x]))
+
+    def aggregate(self,argv):
+        self._prepare_input(argv)
+        self._process_prefixes()
+        return list(str(net) for net in self._networks)
