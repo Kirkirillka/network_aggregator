@@ -1,9 +1,15 @@
 import ipaddress
+import nmap
 
+from multiprocessing.pool import ThreadPool as Pool
 from mongoengine import connect
 
 from storage_models import NetworkEntry, NETWORK
 from utils import validate_net_data, is_addr, is_network, is_supernet
+from utils import normalize
+from consts import ASYNCSCAN, SYNC_SCAN
+from consts import TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN
+from consts import DEFAULT_PORT_RANGE, MAX_RANGE
 
 
 class Hive:
@@ -213,7 +219,7 @@ class Aggregator():
         self._networks = {}
         self._prefixes = {}
 
-    def _add_network(self,network):
+    def _add_network(self, network):
         """ Adds network(s) to the global networks dictionary.
         Since network is a key value, duplicates are inherently removed.
         """
@@ -225,18 +231,17 @@ class Aggregator():
             """
             prefixes = self._prefixes
             prefix = network.prefixlen
-            if not prefixes.get(prefix,None):
-                #Prepare list to safely appent
+            if not prefixes.get(prefix, None):
+                # Prepare list to safely appent
                 prefixes[prefix] = []
             prefixes[prefix].append(network)
-
 
         networks = self._networks
         if network not in networks:
             networks[network] = network.prefixlen
             add_network_to_prefixes(network)
 
-    def _delete_network(self,*args):
+    def _delete_network(self, *args):
         """Removes one of more networks from the global networks dictionary."""
         networks = self._networks
         for network in args:
@@ -245,10 +250,10 @@ class Aggregator():
     def _prepare_input(self, argv):
 
         for line in argv:
-            network = ipaddress.ip_network(line, strict = False)
+            network = ipaddress.ip_network(line, strict=False)
             self._add_network(network)
 
-    def _compare_networks_of_same_prefix_length(self,prefix_list):
+    def _compare_networks_of_same_prefix_length(self, prefix_list):
 
         def find_existing_supernet(network):
             """ This function checks if a subnet is part a of an existing supernet."""
@@ -290,3 +295,144 @@ class Aggregator():
         self._prepare_input(argv)
         self._process_prefixes()
         return list(str(net) for net in self._networks)
+
+
+class Scanner():
+    def __init__(self, threads=2, **args):
+        self._network_targets = set()
+        self._thread_count = threads
+
+    @property
+    def networks(self):
+        # TODO: make a unit test
+        return list(self._network_targets)
+
+    @property
+    def threads(self):
+        # TODO: make a unit test
+        return self._thread_count
+
+    @threads.setter
+    def threads(self, value):
+        # TODO: make a unit test
+        if isinstance(value, int):
+            self._thread_count = value
+
+    @property
+    def mode(self):
+        # Return saved mode. If it hasn't been set arleady, then return default TCP scan mode (TCP_SCAN const).
+        # TODO: make a unit test
+        if hasattr(self, '_mode'):
+            mode = getattr(self, '_mode')
+        else:
+            mode = TCP_SCAN
+
+        return mode
+
+    @mode.setter
+    def mode(self, value):
+        # TCP scanning (-sT), UDP scanning (-sU) and Service Recognition version scanning (-sV) are allowed.
+        # TODO: make a unit test
+        if value in (TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN):
+            setattr(self, '_mode', value)
+
+    @property
+    def port_range(self):
+        # Checks if object arleady has saved _ports attribute, otherwise set that to DEFAULT_PORT_RANGE.
+        # It could be better idea than initilize it in __init__ function, because such boundary checks requires a lot of
+        # coding, I considered __init__ function to be less a bit.
+        # TODO: make a unit test
+        if hasattr(self, '_ports'):
+            range_value = getattr(self, '_ports')
+        else:
+            range_value = DEFAULT_PORT_RANGE
+
+        min_val, max_val = min(range_value), max(range_value)
+        return '{}-{}'.format(min_val, max_val)
+
+    @port_range.setter
+    def port_range(self, value):
+        # TODO: make a unit test
+        import re
+
+        # Supplied net port range must be in string format and to be like 1-23 (regex checks)
+        if isinstance(value, str) and re.match(r'\d-\d', str):
+            # Convert from str to int
+            min_val, max_val = [int(_int_value) for _int_value in str.split('-')]
+
+            # Min port can't be less than the max one
+            if min_val >= max_val:
+                raise ValueError("Min port must be strictly less than max port.")
+
+            # Max port can't be bigger than 2**16 -1, e.g. 65535
+            if not all(value in MAX_RANGE for value in (min_val, max_val)):
+                raise ValueError("Min port and max port must be in range of (1,65535).")
+
+            # If all checks are passed then save it
+            setattr(self, '_ports', range(min_val, max_val))
+        else:
+            raise AttributeError("A port range must be in r\'\d-\d\' form.")
+
+    def add_net_to_scope(self, net):
+        # First we need to normalize supplied string to CIDR form.
+        # Both a host and a network can be represented in CIDR.
+        # Examples:
+        # 192.168.0.1 (IPv4 addr) -> 192.168.0.1/32 (CIDR IPv4 net)
+        # 192.168.0.0/24 (IPv4 net) -> arleady CIDR IPv4 net
+        # 192.168.0.0-192.168.0.255 (address range) -> not implemented
+        # TODO: make a unit test
+        # TODO: implement address range to CIDR IPv4 net normalization
+        normalized_net = normalize(net)
+
+        # Due to using set data structure, we don't need to worry about net duplications.
+        self._network_targets.add(normalized_net)
+
+        return True
+
+    def run_scan_sync(self):
+        """
+        Start thread pool simultaneously and wait until all scans are done. Then it conclude all results into the one
+
+        TODO: make unit test
+        TODO: make a test with Pool and several scanning functions. That must run scan and add its result into one dict which is located in parent function. Using multiprocessig there might be a problem with variables in diffirent processes. If that is so we need to check how to propery use simple threads. But there could be another problem, e.g. nmap module uses nmap scanner, I don't now whether it runs another thread to make scan done or not, but we need to figure it out
+        :return:
+        """
+
+        # A dict where each thread will save its scan result
+        result = {}
+
+        # # Create a Queue and full it with targets to be free of deadlock during multithreaded scanning
+        # target_queue = Queue()
+        # for net in self._network_targets:
+        #     target_queue.put(net)
+
+        # Special function to start nmap with specified args in a new python thread
+        def worker(net):
+            nm = nmap.PortScanner()
+            nm.scan(net, arguments=self.mode, ports=self.port_range)
+
+            # Combine result in non-local variable
+            for scan_net in nm.all_hosts():
+                result[scan_net] = nm[scan_net]
+
+        # Create a thread pool to scan
+        pool = Pool(self.threads)
+
+        # For each net in network list start thread and process worker function upon that.
+        # pool.map works like Queue, e.g. we have _thread_count threads. And if amount of hosts is bigger than amount of
+        # threads, then left hosts will wait until a thread is joined and ready to run worker again.
+        #
+        # Example:
+        # threads: #1th #2th #3th #4th
+        # hosts: 127.0.0.1, 192.168.0.1, 10.0.0.1, 8.8.8.8, 172.168.13.2
+        #
+        # mapping:
+        # #1th - > 127.0.0.1---------------done>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        # ---#2th -> 192.168.0.1---------------done-------------------------------
+        # ------#3th -> 10.0.0.1---------------done-------------------------------
+        # ---------#4th -> 8.8.8.8---------------done-----------------------------
+        # ----------------------------------#1th -> 172.168.13.2---------------done
+        pool.map(worker, [net for net in self._network_targets])
+
+        from pprint import pprint as print
+        print(result)
