@@ -89,3 +89,22 @@ def is_supernet(net, supernet):
     foo = ipaddress.ip_network(net)
     bar = ipaddress.ip_network(supernet)
     return foo.overlaps(bar)
+
+
+def normalize(net: str):
+
+    reg_ipv4_addr_not_cidr = r'^(\d{1,3}).(\d{1,3}).(\d{1,3}).(\d{1,3})$'
+    reg_ipv4_addr_cidr = r'^(\d{1,3}).(\d{1,3}).(\d{1,3}).(\d{1,3})(\/32)$'
+
+    reg_ipv4_net_cidr = r'^(\d{1,3}).(\d{1,3}).(\d{1,3}).(\d{1,3})(\/{0-24})$'
+
+    # If net or addr is arledy given in right format
+    if any(res for res in [re.match(reg_ipv4_addr_cidr, net), re.match(reg_ipv4_net_cidr,net)]):
+        return net
+
+    # Check if net is address but not in CIDR (e.g. 10.0.0.0, not 10.0.0.0/32)
+    if re.match(reg_ipv4_addr_not_cidr, net):
+        return net + '/32'
+
+    # If cannot normalize then raise an exception
+    raise NotImplementedError('Normalization for give net string is not implemented')
