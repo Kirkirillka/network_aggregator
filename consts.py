@@ -1,0 +1,11 @@
+SYNC_SCAN = 1
+ASYNCSCAN = 2
+
+
+TCP_SCAN = '-sT'
+UDP_SCAN = '-sU'
+SERVICE_VERSION_SCAN = '-sV'
+
+
+DEFAULT_PORT_RANGE = range(1,100)
+MAX_RANGE = range(1, 2**16)
