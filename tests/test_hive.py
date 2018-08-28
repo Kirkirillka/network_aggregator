@@ -40,7 +40,7 @@ omeganet = "10.0.0.0/24"
 
 class TestHive(TestCase):
 
-    host = "192.168.93.129"
+    host = "localhost"
     db = 'test_hive'
 
     def setUp(self):
