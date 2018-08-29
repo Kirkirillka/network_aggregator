@@ -12,6 +12,9 @@ from consts import TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN
 from consts import DEFAULT_PORT_RANGE, MAX_RANGE
 
 
+from pprint import pprint as print
+
+
 class Hive:
     """ Description: A Class to hide all functionality of working with MongoDB databases
         It should work with the following model:
@@ -219,6 +222,20 @@ class Aggregator():
         self._networks = {}
         self._prefixes = {}
 
+    @property
+    def permissive_prefix(self):
+        if hasattr(self,'_permissive_interval'):
+            return getattr(self,'_permissive_interval')
+        else:
+            return 1
+
+    @permissive_prefix.setter
+    def permissive_prefix(self, value):
+        if isinstance(value,int) and value in range(1,33):
+            setattr(self,'_permissive_interval',value)
+        else:
+            raise ValueError('Permissive prefix must be in {1..32} range.')
+
     def _add_network(self, network):
         """ Adds network(s) to the global networks dictionary.
         Since network is a key value, duplicates are inherently removed.
@@ -254,6 +271,10 @@ class Aggregator():
             self._add_network(network)
 
     def _compare_networks_of_same_prefix_length(self, prefix_list):
+        # Example
+        # permissive interval is 2, then
+        # 10.90.17.53/32 -> 10.90.17.52/31 -> 10.90.17.52/30 -> prefix /30 -> unite!
+        # 10.90.17.55/32 -> 10.90.17.54/31 -> 10.90.17.52/30 -> prefix /30 -> unite!
 
         def find_existing_supernet(network):
             """ This function checks if a subnet is part a of an existing supernet."""
@@ -273,27 +294,79 @@ class Aggregator():
             elif previous_net is None:
                 previous_net = current_net
             else:
-                # Calculate a one bit larger subet and see if they are the same.
-                supernet1 = previous_net.supernet(prefixlen_diff=1)
-                supernet2 = current_net.supernet(prefixlen_diff=1)
-                if supernet1 == supernet2:
-                    self._add_network(supernet1)
-                    self._delete_network(previous_net, current_net)
-                    previous_net = None
-                else:
+                # For prefixlen in permissive interval try to find overlapped networks. If they overlap, then combine
+                # into one and immediately break.
+                is_done = False
+                for prefixlen in range(1,self.permissive_prefix+1):
+                    supernet1 = previous_net.supernet(prefixlen_diff=prefixlen)
+                    supernet2 = current_net.supernet(prefixlen_diff=prefixlen)
+                    if supernet1 == supernet2:
+                        self._add_network(supernet1)
+                        self._delete_network(previous_net, current_net)
+                        previous_net = None
+
+                        is_done = True
+
+                        break
+                    #else:
+                    #    previous_net = current_net
+                if not is_done:
                     previous_net = current_net
 
     def _process_prefixes(self, prefix=0):
         """Read each list of networks starting with the largest prefixes."""
         prefixes = self._prefixes
 
+
+
+        def make_clean_up_after_prefix_process():
+
+            # Make a copy of net keys for looping around it.
+            network_keys = sorted(self._networks.keys())
+
+            # Take first element in net list. Compare it to others. If it overlaps the other one, then the other
+            # will be removed.
+            #
+            # Example:
+            # 1 first->192.168.0.0/24, overlaps->192.168.0.23/32, 192.168.0.24/25, 127.0.0.1/32, 8.8.8.8/24
+            # 2 first->192.168.0.0/24, overlaps->192.168.0.24/25, 127.0.0.1/32, 8.8.8.8/24
+            # 3 first->192.168.0.0/24, diffirent->127.0.0.1/32, 8.8.8.8/24
+            # 4 first->192.168.0.0/24, 127.0.0.1/32, different->8.8.8.8/24
+            # 5 192.168.0.0/24, first->127.0.0.1/32, different->8.8.8.8/24
+            # 6 192.168.0.0/24, 127.0.0.1/32, first->8.8.8.8/24
+
+            for index,net in enumerate(network_keys):
+                for next_net in network_keys[index+1:]:
+                    # If current net is the same as next_net
+                    if net is next_net:
+                        continue
+                    # If overlaps then delete from left keys
+                    if net.overlaps(next_net):
+                        network_keys.remove(next_net)
+
+            # Clean up from overlapped net
+            for net in network_keys:
+                if net not in network_keys:
+                    self._networks.pop(net)
+
+        # To support both IPv6 and IPv4, start from prefix 128 to 1.
+        # Example: 128...32...24...1
         for x in range(128, prefix, -1):
             if x in prefixes:
                 self._compare_networks_of_same_prefix_length(sorted(prefixes[x]))
+                print(self._networks)
+                print(len(self._networks))
+                print('')
+
+        #Make clean up on hosts with similar host address but diffirent mask.
+        make_clean_up_after_prefix_process()
 
     def aggregate(self, argv):
+        # Prepare networks and prefixes
         self._prepare_input(argv)
+        # Process data
         self._process_prefixes()
+        # Return only strings in CIDR format.
         return list(str(net) for net in self._networks)
 
 
@@ -434,5 +507,5 @@ class Scanner():
         # ----------------------------------#1th -> 172.168.13.2---------------done
         pool.map(worker, [net for net in self._network_targets])
 
-        from pprint import pprint as print
+
         print(result)
