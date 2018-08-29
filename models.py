@@ -1,37 +1,36 @@
 import ipaddress
-import nmap
-
 from multiprocessing.pool import ThreadPool as Pool
+from pprint import pprint as print
+
 from mongoengine import connect
 
-from storage_models import NetworkEntry, NETWORK
-from utils import validate_net_data, is_addr, is_network, is_supernet
-from utils import normalize
-from consts import ASYNCSCAN, SYNC_SCAN
-from consts import TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN
+import nmap
 from consts import DEFAULT_PORT_RANGE, MAX_RANGE
-
-
-from pprint import pprint as print
+from consts import TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN
+from storage_models import NetworkEntry, NETWORK
+from utils import normalize
+from utils import validate_net_data, is_addr, is_network
 
 
 class Hive:
-    """ Description: A Class to hide all functionality of working with MongoDB databases
-        It should work with the following model:
+    """
+        Class to hide all functionality of working with MongoDB databases.
 
-        {
-            "type":["address","network"],
-            "value": "Data stored in CIDR format",
-            "id":"Don't exactly know whether it's necessary for further interaction",
-            "supernet": "Link to uplink supernet. Should be lazy relation in term of pymongo I suggest",
-            "children": ["Must be a array with links to children"]
-        }
+        Args:
+            host (str): IPv4 numerical or domain name of MongoDB instance to connect to. It's considered to use the
+                standard port TCP\27017.
+            db (str): Name for database to connect to. Default is "network_storage".
 
-        Methods:
-            add_network(net_data:json): pass
-            add_host(host_data:json): pass
-            get_supernet(network_address): pass
-            get_children(network_address): pass
+        Notes:
+            It should work with the following model:
+
+            {
+                "type":["address","network"],
+                "value": "Data stored in CIDR format",
+                "id":"Don't exactly know whether it's necessary for further interaction",
+                "supernet": "Link to uplink supernet. Should be lazy relation in term of pymongo I suggest",
+                "children": ["Must be a array with links to children"]
+            }
     """
 
     def __init__(self, host, db="network_storage"):
@@ -46,8 +45,11 @@ class Hive:
         """
             Checks if supplied net (can be both network or host address in CIDR format) is added to hive.
 
-        :param net:  A string in CIDR format (only IPv4).
-        :return: True of False whether a net exists in hive.
+            Raises:
+                ValueError: A supplied net information is not in valid format. Net must be string in CIDR format.
+
+        :param net: str:  A string in CIDR format (only IPv4).
+        :return: bool: True of False whether a net exists in hive.
         """
         if any(x(net) for x in [is_network, is_addr]):
             net = NetworkEntry.objects(value=net)
@@ -55,24 +57,27 @@ class Hive:
         else:
             ValueError('A supplied network is not in a valid format.')
 
-    def add_network(self, net_data: str):
+    def add_network(self, net_data):
         """
             Add supplied network data as a NetworkEntry into storage. net_data can be a string with network address
-            or specific dictionary with required fields.
-            Only IPv4 for now.
+            or specific dictionary with required fields. Only IPv4 for now.
 
-            Example of a dictionary:
+            Examples:
+                dictionary_example = {
+                    "fields":"192.168.13.0/24",
+                    "type":"network"
+                }
 
-            {
-                "fields":"192.168.13.0/24",
-                "type":"network"
-            }
+            Raises:
+                ValueError: A supplied net information is not in valid format. Net must be string in CIDR format.
 
             TODO: implement a method to add NetworkEntry by given net_data in dict format.
+            TODO: make a test and check its correctness.
+            TODO: test saving NetworkEntry by dict supplying.
 
-
-        :param net_data: a string or a dict with required information about network address to add into storage.
-        :return: True if a network was inserted successfully otherwise False.
+        :param net_data: str or dict: a string or a dict with required information about network
+            address to add into storage.
+        :return: bool: True if a network was inserted successfully otherwise False.
         """
 
         if not validate_net_data(net_data):
@@ -89,22 +94,23 @@ class Hive:
 
     def add_host(self, host_data: str):
         """
-                    Add supplied host data as a NetworkEntry into storage. host_data can be a string with host address
-                    or specific dictionary with required fields.
-                    Only IPv4 for now.
+            Add supplied host data as a NetworkEntry into storage. host_data can be a string with host address
+            or specific dictionary with required fields. Only IPv4 for now.
 
-                    Example of a dictionary:
+            Examples:
+                dictionary_example = {
+                            "fields":"192.168.13.2",
+                            "type":"host"
+                        }
 
-                    {
-                        "fields":"192.168.13.2",
-                        "type":"host"
-                    }
+            TODO: implement a method to add NetworkEntry by given net_data in dict format.
+            TODO: test saving NetworkEntry by dict supplying.
+            TODO: check function whether it works properly. Pay attention on creation an entry by dict.
 
-                    TODO: implement a method to add NetworkEntry by given net_data in dict format.
-
-                :param host_data: a string or a dict with required information about host address to add into storage.
-                :return: True if a host was inserted successfully otherwise False.
-                """
+        :param host_data: str or dict: A string or a dict with required information about host
+            address to add into storage.
+        :return: bool: True if a host was inserted successfully otherwise False.
+        """
 
         if not validate_net_data(host_data):
             if not is_addr(host_data):
@@ -112,7 +118,6 @@ class Hive:
             else:
                 net = NetworkEntry(value=host_data, type=NETWORK)
                 net.save()
-
                 return True
 
         # Provide arguments as **kwargs key-value pairs
@@ -122,18 +127,25 @@ class Hive:
         return True
 
     def add_child_to_net(self, net, *args):
-        """
-            Allows to add a list of children for given net. A list must be strings in CIDR format (IPv4 only).
-            Also these children as well as a given net must be already added to hive before assignment to the net.
-            It returns True if children were successfully appended to net's children list.
-            Otherwise it returns False either there is no net in hive.
-            If given child in *args is not added, then it creates
-             a new Network Entry with specified network address before assignment.
-        :param net: A string in CIDR format (only IPv4) to add children networks to.
-        :param args: A list of strings in CIDR format (only IPV4) to describe children's network values.
-        :return: True if children were successfully appended to net's children list.
+        """Allows to add a list of children for given net.
+
+            Notes:
+                A list must be strings in CIDR format (IPv4 only).
+                Also these children must be already added to hive before assignment to the net as well as a given net.
+                If given child in *args is not added, then it DOESN'T create a new Network Entry. Make sure you add a
+                new NetworkEntry by yourself otherwise you raise an exception.
+
+            Raises:
+                ValueError: A child network was not added to the hive before assignment to a supernet.
+                ValueError: A supplied net information is not in valid format. Net must be string in CIDR format.
+                ValueError: Supernet is not found in the hive.
+
+        :param net: str: A string in CIDR format (only IPv4) to add children networks to.
+        :param args: list of str: A list of strings in CIDR format (only IPV4) to describe children's network values.
+        :return: bool: True if children were successfully appended to net's children list.
         """
 
+        # Try to find subnet in the hive
         net = NetworkEntry.objects(value=net).first()
         # If target network exists
         if net:
@@ -143,7 +155,7 @@ class Hive:
                     # Check if the child is added to MongoDB.
                     # Otherwise, throw exception
                     if not self.is_added(child):
-                        raise ValueError('A child network is not added to the hive before assignment to a supernet.')
+                        raise ValueError('A child network was not added to the hive before assignment to a supernet.')
 
                     # Need to use .first because <>.objects() returns a cursor, not an object
                     child_entry = NetworkEntry.objects(value=child).first()
@@ -159,14 +171,16 @@ class Hive:
 
     def set_supernet(self, net, supernet):
         """
-            Function returns set supernet for specific supplied net.
-            Both net and supernet must be added to hive and connected before.
-            Check other function to see how to add and connect nets to each other.
+            Set supernet for specific supplied net.
 
-        :param net: a string in CIDR format (only IPv4), which will be linked to supplied supernet
-        :param supernet: a string in CIDR format (only IPv4), to be set as supernet.
+            Notes:
+                Both net and supernet must be added to hive and connected before.
+                Check other function to see how to add and connect nets to each other.
+
+        :param net: str: a string in CIDR format (only IPv4), which will be linked to supplied supernet
+        :param supernet: str: a string in CIDR format (only IPv4), to be set as supernet.
             A NetworkEntry with that supernet value may not have that net as one of its child.
-        :return: True if set successfully. False if either format is invalid or nets were not added.
+        :return: bool: True if set successfully. False if either format is invalid or nets were not added.
         """
 
         # If input is not valid networks
@@ -177,6 +191,8 @@ class Hive:
         if not all(self.is_added(foo) for foo in (net, supernet)):
             return False
 
+        # Fount entries in the hive.
+        # We need to use .first methods, because .objects returns a cursor.
         added_net = NetworkEntry.objects(value=net).first()
         added_supernet = NetworkEntry.objects(value=supernet).first()
 
@@ -188,10 +204,10 @@ class Hive:
 
     def get_supernet(self, network_address):
         """
-            Return a string which shows a network in CIDR format, that
-             was assigned to specified network as supernet.
-        :param network_address: a string in CIDR format (only IPv4) what supernet will be looked up to.
-        :return: a string of supernet value in CIDR format.
+            Return a string which shows a network in CIDR format, that was assigned to specified network as supernet.
+
+        :param network_address: str: A string in CIDR format (only IPv4) what supernet will be looked up to.
+        :return: str: A string of supernet value in CIDR format.
         """
 
         net = NetworkEntry.objects(value=network_address).first()
@@ -200,8 +216,9 @@ class Hive:
     def get_children(self, network_address):
         """
             Return a list of children for given network.
-        :param network_address: a string in CIDR format.
-        :return: a list of strings described children in CIDR format.
+
+        :param str: network_address: A string in CIDR format.
+        :return: list of str: A list of strings described children in CIDR format.
         """
 
         net = NetworkEntry.objects(value=network_address).first()
@@ -210,11 +227,12 @@ class Hive:
         return list(child.value for child in children)
 
 
-class Aggregator():
+class Aggregator:
     """ This class and the whole logic are based on
             https://github.com/grelleum/supernets.git
 
         Thank you, Grem Mueller @grlleum for such good aggregation algorithm!
+        TODO: comment it properly
     """
 
     def __init__(self):
@@ -224,15 +242,15 @@ class Aggregator():
 
     @property
     def permissive_prefix(self):
-        if hasattr(self,'_permissive_interval'):
-            return getattr(self,'_permissive_interval')
+        if hasattr(self, '_permissive_interval'):
+            return getattr(self, '_permissive_interval')
         else:
             return 1
 
     @permissive_prefix.setter
     def permissive_prefix(self, value):
-        if isinstance(value,int) and value in range(1,33):
-            setattr(self,'_permissive_interval',value)
+        if isinstance(value, int) and value in range(1, 33):
+            setattr(self, '_permissive_interval', value)
         else:
             raise ValueError('Permissive prefix must be in {1..32} range.')
 
@@ -241,17 +259,17 @@ class Aggregator():
         Since network is a key value, duplicates are inherently removed.
         """
 
-        def add_network_to_prefixes(network):
+        def add_network_to_prefixes(net):
             """ Adds networks to the prefix dictionary.
             The prefix dictionary is keyed by prefixes.
             Networks of the same prefix length are stored in a list.
             """
             prefixes = self._prefixes
-            prefix = network.prefixlen
+            prefix = net.prefixlen
             if not prefixes.get(prefix, None):
                 # Prepare list to safely appent
                 prefixes[prefix] = []
-            prefixes[prefix].append(network)
+            prefixes[prefix].append(net)
 
         networks = self._networks
         if network not in networks:
@@ -297,7 +315,7 @@ class Aggregator():
                 # For prefixlen in permissive interval try to find overlapped networks. If they overlap, then combine
                 # into one and immediately break.
                 is_done = False
-                for prefixlen in range(1,self.permissive_prefix+1):
+                for prefixlen in range(1, self.permissive_prefix + 1):
                     supernet1 = previous_net.supernet(prefixlen_diff=prefixlen)
                     supernet2 = current_net.supernet(prefixlen_diff=prefixlen)
                     if supernet1 == supernet2:
@@ -308,7 +326,7 @@ class Aggregator():
                         is_done = True
 
                         break
-                    #else:
+                    # else:
                     #    previous_net = current_net
                 if not is_done:
                     previous_net = current_net
@@ -316,8 +334,6 @@ class Aggregator():
     def _process_prefixes(self, prefix=0):
         """Read each list of networks starting with the largest prefixes."""
         prefixes = self._prefixes
-
-
 
         def make_clean_up_after_prefix_process():
 
@@ -335,8 +351,8 @@ class Aggregator():
             # 5 192.168.0.0/24, first->127.0.0.1/32, different->8.8.8.8/24
             # 6 192.168.0.0/24, 127.0.0.1/32, first->8.8.8.8/24
 
-            for index,net in enumerate(network_keys):
-                for next_net in network_keys[index+1:]:
+            for index, net in enumerate(network_keys):
+                for next_net in network_keys[index + 1:]:
                     # If current net is the same as next_net
                     if net is next_net:
                         continue
@@ -358,7 +374,7 @@ class Aggregator():
                 print(len(self._networks))
                 print('')
 
-        #Make clean up on hosts with similar host address but diffirent mask.
+        # Make clean up on hosts with similar host address but diffirent mask.
         make_clean_up_after_prefix_process()
 
     def aggregate(self, argv):
@@ -370,31 +386,87 @@ class Aggregator():
         return list(str(net) for net in self._networks)
 
 
-class Scanner():
+class Scanner:
+    """
+        A class to process scanning with nmap on specified hosts using thread pool
+
+        To use that class you should create an instance of the class, update scanning host list by add_net_to_scope.
+        After use run_scan_sync function to start scanning synchronously, so that execution would be blocked until all
+        scanning hosts are done. Another way is to use asynchronous way to exec, but that is not implemented.
+
+        Notes:
+            You can add ether IPv4 address or IPv4 net in CIDR format - it will be normalized to CIDR format either way.
+            Also, you can specify scanning mode - TCP scanning( -sT nmap option), UDP scanning (-sU),
+            Service Version detection (-sV). You can  use variables from consts.py module to specify what mode you need
+            to use during scanning. After scan process is done, the result is just printed in human-readable form.
+
+        Args:
+            threads: count of threads to start simultaneously in pool during scanning. Default is 2 threads.
+
+        Attributes:
+            networks: property to return list of added networks to scan.
+                Returning networks are normalized.
+            threads: property to set and return count of threads to start scanning simultaneously.
+            mode: property to set and return specified mode of scanning. Now TCP scanning, UDP scanning,
+                Service Version detection mode are added. Constants to specify modes are in consts.py module.
+                Default mode is TCP_SCAN.
+            port_range: property to set and return port range list. Format of returning and setting
+                s r'\d-\d' (e.g. '1-1000'). Min port is 1, max port is 65535. Min port must be less than max port.
+
+        Todo:
+            TODO: implement asynchronous scanning.
+            TODO: implement several function to export scan result in diffirent format (CSV, XML, JSON, greppable).
+            TODO: code hw to use result of scan in futher processing, not simply put on the screen.
+    """
+
     def __init__(self, threads=2, **args):
         self._network_targets = set()
         self._thread_count = threads
 
     @property
     def networks(self):
-        # TODO: make a unit test
+        """
+            Returns list of hosts to scan. Can be updated using of add_net_to_scope function.
+
+            TODO: make a unit test
+
+        :returns: list of str
+        """
+
         return list(self._network_targets)
 
     @property
     def threads(self):
-        # TODO: make a unit test
+        """
+            Returns count of threads which will be started in pool during scanning simultaneously.
+
+            TODO: make a unit test
+
+        :return: int
+        """
         return self._thread_count
 
     @threads.setter
     def threads(self, value):
-        # TODO: make a unit test
+        """
+            Set count of threads to start pool for scanning.
+
+            TODO: make a unit test
+
+        :param value: int
+        """
         if isinstance(value, int):
             self._thread_count = value
 
     @property
     def mode(self):
-        # Return saved mode. If it hasn't been set arleady, then return default TCP scan mode (TCP_SCAN const).
-        # TODO: make a unit test
+        """
+            Return mode of scanning. If it hasn't been set already, then return default TCP scan mode (TCP_SCAN const).
+
+            TODO: make a unit test
+
+        :return: str
+        """
         if hasattr(self, '_mode'):
             mode = getattr(self, '_mode')
         else:
@@ -404,17 +476,30 @@ class Scanner():
 
     @mode.setter
     def mode(self, value):
-        # TCP scanning (-sT), UDP scanning (-sU) and Service Recognition version scanning (-sV) are allowed.
-        # TODO: make a unit test
+        """
+            Set mode of scanning. Now available to set are: TCP scanning (-sT), UDP scanning (-sU) and Service
+            Recognition version scanning (-sV) are allowed.
+
+            TODO: make a unit test
+
+        :param value: TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN
+        """
         if value in (TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN):
             setattr(self, '_mode', value)
 
     @property
     def port_range(self):
-        # Checks if object arleady has saved _ports attribute, otherwise set that to DEFAULT_PORT_RANGE.
-        # It could be better idea than initilize it in __init__ function, because such boundary checks requires a lot of
-        # coding, I considered __init__ function to be less a bit.
-        # TODO: make a unit test
+        """
+            Return port range for scanning. Ports can be in range 1 to 65535. Return format is r"\d-\d", e.g. 1-10000.
+
+            Checks if object already has saved _ports attribute, otherwise set that to DEFAULT_PORT_RANGE.
+            It could be better idea than initialize it in __init__ function, because such boundary checks requires
+            a lot of coding, I considered __init__ function to be less a bit.
+
+            TODO: make a unit test
+
+        :return: str
+        """
         if hasattr(self, '_ports'):
             range_value = getattr(self, '_ports')
         else:
@@ -425,15 +510,25 @@ class Scanner():
 
     @port_range.setter
     def port_range(self, value):
-        # TODO: make a unit test
+        """
+            Set port range for scanning. Range format is r"\d-\d", e.g. you need supply a string like "1-10000".
+
+            Raises:
+                ValueError: Min port must be strictly less than max port.
+                ValueError: Min port and max port must be in range of (1,65535).
+                AttributeError: A port range must be in r\'\d-\d\' form.
+
+            TODO: make a unit test
+
+        :param value: str
+        """
         import re
 
-        # Supplied net port range must be in string format and to be like 1-23 (regex checks)
         if isinstance(value, str) and re.match(r'\d-\d', str):
             # Convert from str to int
             min_val, max_val = [int(_int_value) for _int_value in str.split('-')]
 
-            # Min port can't be less than the max one
+            # Min port can't be less than the max one.
             if min_val >= max_val:
                 raise ValueError("Min port must be strictly less than max port.")
 
@@ -447,37 +542,58 @@ class Scanner():
             raise AttributeError("A port range must be in r\'\d-\d\' form.")
 
     def add_net_to_scope(self, net):
-        # First we need to normalize supplied string to CIDR form.
-        # Both a host and a network can be represented in CIDR.
-        # Examples:
-        # 192.168.0.1 (IPv4 addr) -> 192.168.0.1/32 (CIDR IPv4 net)
-        # 192.168.0.0/24 (IPv4 net) -> arleady CIDR IPv4 net
-        # 192.168.0.0-192.168.0.255 (address range) -> not implemented
-        # TODO: make a unit test
-        # TODO: implement address range to CIDR IPv4 net normalization
+        """
+            A function to add a net network to scope to scan further.
+
+            Notes:
+                Supplied net string will be normalized to CIDR format before processing.
+                As for network list storage set data structure is used, we don't need to check for duplicates of nets.
+
+            Examples:
+                192.168.0.1 (IPv4 addr) -> 192.168.0.1/32 (CIDR IPv4 net)
+                192.168.0.0/24 (IPv4 net) -> arleady CIDR IPv4 net
+                192.168.0.0-192.168.0.255 (address range) -> not implemented
+
+
+            TODO: make a unit test
+            TODO: implement address range to CIDR IPv4 net normalization
+
+        :param net: str
+        :return: bool: True if supplied net string is successfully supplied.
+        """
+
         normalized_net = normalize(net)
-
-        # Due to using set data structure, we don't need to worry about net duplications.
         self._network_targets.add(normalized_net)
-
         return True
 
     def run_scan_sync(self):
         """
-        Start thread pool simultaneously and wait until all scans are done. Then it conclude all results into the one
+            Start thread pool simultaneously and wait until all scans are done.
+            Then it combine all results into one dict and just print it out.
 
-        TODO: make unit test
-        TODO: make a test with Pool and several scanning functions. That must run scan and add its result into one dict which is located in parent function. Using multiprocessig there might be a problem with variables in diffirent processes. If that is so we need to check how to propery use simple threads. But there could be another problem, e.g. nmap module uses nmap scanner, I don't now whether it runs another thread to make scan done or not, but we need to figure it out
-        :return:
+            Notes:
+                For each net in network list start thread and process worker function upon that.
+                pool.map works like Queue, e.g. we have _thread_count threads. And if amount of hosts is bigger than
+                amount of threads, then left hosts will wait until a thread is joined and ready to run worker again.
+
+            Example:
+                threads: #1th #2th #3th #4th
+                hosts: 127.0.0.1, 192.168.0.1, 10.0.0.1, 8.8.8.8, 172.168.13.2
+
+                 mapping:
+                 #1th - > 127.0.0.1---------------done>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+                 ---#2th -> 192.168.0.1---------------done-------------------------------
+                 ------#3th -> 10.0.0.1---------------done-------------------------------
+                 ---------#4th -> 8.8.8.8---------------done-----------------------------
+                 ----------------------------------#1th -> 172.168.13.2---------------done
+
+            TODO: make unit test
+
+        :return: None
         """
 
         # A dict where each thread will save its scan result
         result = {}
-
-        # # Create a Queue and full it with targets to be free of deadlock during multithreaded scanning
-        # target_queue = Queue()
-        # for net in self._network_targets:
-        #     target_queue.put(net)
 
         # Special function to start nmap with specified args in a new python thread
         def worker(net):
@@ -490,22 +606,10 @@ class Scanner():
 
         # Create a thread pool to scan
         pool = Pool(self.threads)
-
-        # For each net in network list start thread and process worker function upon that.
-        # pool.map works like Queue, e.g. we have _thread_count threads. And if amount of hosts is bigger than amount of
-        # threads, then left hosts will wait until a thread is joined and ready to run worker again.
-        #
-        # Example:
-        # threads: #1th #2th #3th #4th
-        # hosts: 127.0.0.1, 192.168.0.1, 10.0.0.1, 8.8.8.8, 172.168.13.2
-        #
-        # mapping:
-        # #1th - > 127.0.0.1---------------done>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-        # ---#2th -> 192.168.0.1---------------done-------------------------------
-        # ------#3th -> 10.0.0.1---------------done-------------------------------
-        # ---------#4th -> 8.8.8.8---------------done-----------------------------
-        # ----------------------------------#1th -> 172.168.13.2---------------done
+        # Start pool and join the result
         pool.map(worker, [net for net in self._network_targets])
 
-
         print(result)
+
+    def run_scan_async(self, callback: function):
+        raise NotImplementedError
