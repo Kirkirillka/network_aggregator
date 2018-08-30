@@ -3,6 +3,7 @@ from models import Hive
 from itertools import chain
 from storage_models import NetworkEntry, connect
 from utils import is_addr, is_network, is_supernet, validate_net_data
+from consts import ADDRESS, NETWORK
 
 right_network = [
     "10.0.0.0/24",
@@ -59,17 +60,17 @@ class TestHive(TestCase):
 
         net_data1 = {
             "value": "192.168.34.4",
-            "type": "host"
+            "type": ADDRESS
         }
 
         net_data2 = {
             "value": "192.168.34.0/24",
-            "type": "network"
+            "type": NETWORK
         }
 
         net_data3 = {
             "value": "192.168.34.4",
-            "type": "host",
+            "type": ADDRESS,
             "os": "Linux",
             "ports": [21, 22, 80, 443]
         }
@@ -123,7 +124,7 @@ class TestHive(TestCase):
         for net in right_network:
             self.assertEqual(hive.is_added(net), True)
 
-    def test_add_network(self):
+    def test_add_network_by_string(self):
         hive = Hive(self.host, self.db)
 
         # Must catch ValueError bacause each net has a wrong format
@@ -133,6 +134,24 @@ class TestHive(TestCase):
         # Must return True because these net's formats are valid.
         for x in right_network:
             self.assertEqual(hive.add_network(x), True)
+
+
+    def test_add_network_by_dict(self):
+
+        net = {
+            "value":"192.168.0.0/24",
+            "type":"network"
+        }
+
+        wrong_net = {
+            "value": "192.168.0.0",
+            "type": "network"
+        }
+
+        hive = Hive(self.host, self.db)
+
+        self.assertEqual(hive.add_network(net),True)
+        self.assertRaises(ValueError, hive.add_network, wrong_net)
 
     def test_add_child_to_net(self):
         hive = Hive(self.host, self.db)
@@ -155,7 +174,7 @@ class TestHive(TestCase):
         self.assertEqual(hive.add_child_to_net(net, subnet1), True)
         self.assertEqual(hive.add_child_to_net(net, subnet2), True)
 
-    def test_add_host(self):
+    def test_add_host_by_string(self):
 
         hive = Hive(self.host, self.db)
 
@@ -163,7 +182,24 @@ class TestHive(TestCase):
             self.assertEqual(hive.add_host(x), True, x)
 
         for y in wrong_host:
-            self.assertEqual(hive.add_host(y), False, y)
+            self.assertRaises(ValueError,hive.add_host, y)
+
+    def test_add_host_by_dict(self):
+
+        host = {
+            'value': "192.168.0.1",
+            "type": "address"
+        }
+
+        wrong_host = {
+            'value': "192.168.0.0/24",
+            "type": "address"
+        }
+
+        hive = Hive(self.host, self.db)
+
+        self.assertEqual(hive.add_host(host),True)
+        self.assertRaises(ValueError, hive.add_host, wrong_host)
 
     def test_get_supernet(self):
         hive = Hive(self.host, self.db)
