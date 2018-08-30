@@ -57,6 +57,10 @@ class Hive:
         else:
             ValueError('A supplied network is not in a valid format.')
 
+    def _add_net_entry(self, net_data, type: str):
+        # TODO: use _add_net_entry to add new entry to hive implicity. add_network and add_host must use that function.
+        pass
+
     def add_network(self, net_data):
         """
             Add supplied network data as a NetworkEntry into storage. net_data can be a string with network address
@@ -80,17 +84,21 @@ class Hive:
         :return: bool: True if a network was inserted successfully otherwise False.
         """
 
-        if not validate_net_data(net_data):
-            if is_network(net_data):
-                net = NetworkEntry(value=net_data, type=NETWORK)
-                net.save()
-            else:
-                raise ValueError('A supplied net_data is not in a valid format.')
-        else:
-            # Provide arguments as **kwargs key-value pairs
+        # If net_data is valid dictionary
+        if isinstance(net_data, dict) and validate_net_data(net_data):
             net = NetworkEntry(**net_data)
             net.save()
-        return True
+
+            return True
+
+        # If net_data is valid string
+        if isinstance(net_data, str) and is_network(net_data):
+            net = NetworkEntry(value=net_data, type=NETWORK)
+            net.save()
+
+            return True
+
+        raise ValueError('A supplied net_data is not in a valid format.')
 
     def add_host(self, host_data: str):
         """
@@ -112,19 +120,21 @@ class Hive:
         :return: bool: True if a host was inserted successfully otherwise False.
         """
 
-        if not validate_net_data(host_data):
-            if not is_addr(host_data):
-                return False
-            else:
-                net = NetworkEntry(value=host_data, type=NETWORK)
-                net.save()
-                return True
+        # If net_data is valid dictionary
+        if isinstance(host_data, dict) and validate_net_data(host_data):
+            net = NetworkEntry(**host_data)
+            net.save()
 
-        # Provide arguments as **kwargs key-value pairs
-        net = NetworkEntry(**host_data)
-        net.save()
+            return True
 
-        return True
+        # If net_data is valid string
+        if isinstance(host_data, str) and is_addr(host_data):
+            net = NetworkEntry(value=host_data, type=NETWORK)
+            net.save()
+
+            return True
+
+        raise ValueError('A supplied net_data is not in a valid format.')
 
     def add_child_to_net(self, net, *args):
         """Allows to add a list of children for given net.
@@ -228,10 +238,29 @@ class Hive:
 
 
 class Aggregator:
-    """ This class and the whole logic are based on
+    """
+
+        Note:
+            This class and logic are based on
             https://github.com/grelleum/supernets.git
 
-        Thank you, Grem Mueller @grlleum for such good aggregation algorithm!
+            Also, there permissive prefix added to help the algo to find supernet with prefix in allowable range.
+            See Examples section to look what it means.
+            Thank you, Grem Mueller @grlleum for such good aggregation algorithm!
+
+        Examples:
+            We have two nets - 192.168.0.0/25 and 192.168.1.0/25. Let's suppose permissive prefix is 1.
+            Then the algorithm works such way:
+                192.168.0.0/25 -> 192.168.0.0/24
+                192.168.1.0/25 -> 192.168.1.0/24
+            You see it runs only once. Event prefix is /24, supernets are not same, so these nets are not aggregated.
+
+            Let permissive prefix be 2:
+                192.168.0.0/25 -> 192.168.0.0/24 -> 192.168.0.0/23
+                192.168.1.0/25 -> 192.168.1.0/24 -> 192.168.0.0/23
+            Now that fits /23 prefix, so networks will be aggregated. We can use 192.168.0.0/23 to describe
+            these networks.
+
         TODO: comment it properly
     """
 
@@ -255,14 +284,16 @@ class Aggregator:
             raise ValueError('Permissive prefix must be in {1..32} range.')
 
     def _add_network(self, network):
-        """ Adds network(s) to the global networks dictionary.
-        Since network is a key value, duplicates are inherently removed.
+        """
+            Adds network(s) to the global networks dictionary.
+            Since network is a key value, duplicates are inherently removed.
         """
 
         def add_network_to_prefixes(net):
-            """ Adds networks to the prefix dictionary.
-            The prefix dictionary is keyed by prefixes.
-            Networks of the same prefix length are stored in a list.
+            """
+                Adds networks to the prefix dictionary.
+                The prefix dictionary is keyed by prefixes.
+                Networks of the same prefix length are stored in a list.
             """
             prefixes = self._prefixes
             prefix = net.prefixlen
@@ -413,10 +444,10 @@ class Scanner:
             port_range: property to set and return port range list. Format of returning and setting
                 s r'\d-\d' (e.g. '1-1000'). Min port is 1, max port is 65535. Min port must be less than max port.
 
-        Todo:
-            TODO: implement asynchronous scanning.
-            TODO: implement several function to export scan result in diffirent format (CSV, XML, JSON, greppable).
-            TODO: code hw to use result of scan in futher processing, not simply put on the screen.
+
+        TODO: implement asynchronous scanning.
+        TODO: implement several function to export scan result in diffirent format (CSV, XML, JSON, greppable).
+        TODO: code hw to use result of scan in futher processing, not simply put on the screen.
     """
 
     def __init__(self, threads=2, **args):
@@ -611,5 +642,6 @@ class Scanner:
 
         print(result)
 
-    def run_scan_async(self, callback: function):
+    def run_scan_async(self, callback):
+        pass
         raise NotImplementedError
