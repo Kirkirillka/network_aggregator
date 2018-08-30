@@ -8,21 +8,21 @@ from utils import is_supernet, is_network, is_addr, validate_net_data
 
 
 
-initial_networks = [
-    "182.167.12.0/25",
-    "182.167.12.128/25",
-    "8.8.8.8/32"
-]
-
-result_networks = [
-    "182.167.12.0/24",
-    "8.8.8.8/32"
-]
-
 
 class TestAggregator(TestCase):
 
     def test_aggregate(self):
+
+        initial_networks = [
+            "182.167.12.0/25",
+            "182.167.12.128/25",
+            "8.8.8.8/32"
+        ]
+
+        result_networks = [
+            "182.167.12.0/24",
+            "8.8.8.8/32"
+        ]
 
         aggr = Aggregator()
         aggregated_list = aggr.aggregate(initial_networks)
@@ -41,7 +41,7 @@ class TestAggregator(TestCase):
         for r in samples:
             with open(r) as file:
                 for net in file:
-                    # To clean up after reading with \n characher
+                    # To clean up after reading with \n character
                     net = net.rstrip('\n')
 
 
