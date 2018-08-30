@@ -1,7 +1,7 @@
 from mongoengine import *
 
-ADDRESS = "address"
-NETWORK = "network"
+
+from consts import ADDRESS, NETWORK
 
 
 class NetworkEntry(Document):
