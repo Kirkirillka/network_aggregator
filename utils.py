@@ -119,7 +119,7 @@ def normalize(net: str):
     reg_ipv4_addr_not_cidr = r'^(\d{1,3}).(\d{1,3}).(\d{1,3}).(\d{1,3})$'
     reg_ipv4_addr_cidr = r'^(\d{1,3}).(\d{1,3}).(\d{1,3}).(\d{1,3})(\/32)$'
 
-    reg_ipv4_net_cidr = r'^(\d{1,3}).(\d{1,3}).(\d{1,3}).(\d{1,3})(\/{0-24})$'
+    reg_ipv4_net_cidr = r'^(\d{1,3}).(\d{1,3}).(\d{1,3}).(\d{1,3})(\/([1-9]|1[0-9]|2[0-9]|3[0-4]))$'
 
     # If net or addr is arledy given in right format
     if any(res for res in [re.match(reg_ipv4_addr_cidr, net), re.match(reg_ipv4_net_cidr,net)]):
