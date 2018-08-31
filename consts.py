@@ -12,3 +12,13 @@ MAX_RANGE = range(1, 2**16)
 # Constants to determinate choices for NetworkEntry MongoDB class.
 ADDRESS = "address"
 NETWORK = "network"
+
+
+# Constants to set modes for aggregation
+
+MAX = 0b001
+HORIZONTAL_MODE = 0b010
+VERTICAL_MODE = 0b100
+
+
+DEBUG = True

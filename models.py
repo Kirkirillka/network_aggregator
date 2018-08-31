@@ -7,9 +7,15 @@ from mongoengine import connect
 import nmap
 from consts import DEFAULT_PORT_RANGE, MAX_RANGE
 from consts import TCP_SCAN, UDP_SCAN, SERVICE_VERSION_SCAN
+from consts import HORIZONTAL_MODE, VERTICAL_MODE, MAX
+
+from consts import DEBUG
+
 from storage_models import NetworkEntry, NETWORK
 from utils import normalize
 from utils import validate_net_data, is_addr, is_network
+
+from logtools import aggregated, analyze
 
 
 class Hive:
@@ -282,6 +288,57 @@ class Aggregator:
             setattr(self, '_permissive_interval', value)
         else:
             raise ValueError('Permissive prefix must be in {1..32} range.')
+        
+    @property
+    def swap_prefix(self):
+        """
+        TODO: make a unit test
+        :return:
+        """
+        if hasattr(self, '_swap_interval'):
+            return getattr(self, '_swap_interval')
+        else:
+            return 1
+    
+    @swap_prefix.setter
+    def swap_prefix(self, value):
+        """
+        TODO: make a unit test
+        :param value:
+        :return:
+        """
+        if isinstance(value, int) and value in range(1, 32):
+            setattr(self, '_swap_interval', value)
+        else:
+            raise ValueError('Swap prefix must be in {1..31} range.')
+
+    @property
+    def mode(self):
+        """
+        TODO: make a unit test
+        :return:
+        """
+        if hasattr(self, '_mode'):
+            return getattr(self, '_mode')
+        else:
+            return HORIZONTAL_MODE
+
+    @mode.setter
+    def mode(self, value):
+        """
+        TODO: make a unit test
+        :param value:
+        :return:
+        """
+        if isinstance(value, int) and value in range(VERTICAL_MODE+HORIZONTAL_MODE+MAX+1):
+            setattr(self, '_mode', value)
+        else:
+            raise ValueError('Modes are: VERTICAL_MODE, HORIZONTAL_MODE, MAX')
+
+    @property
+    def networks(self):
+        # TODO: make a unit test
+        return list(str(net) for net in self._networks)
 
     def _add_network(self, network):
         """
@@ -313,13 +370,14 @@ class Aggregator:
         for network in args:
             networks.pop(network, None)
 
+
     def _prepare_input(self, argv):
 
         for line in argv:
             network = ipaddress.ip_network(line, strict=False)
             self._add_network(network)
 
-    def _compare_networks_of_same_prefix_length(self, prefix_list):
+    def _horizontal_aggregation(self, start_prefix: int):
         # Example
         # permissive interval is 2, then
         # 10.90.17.53/32 -> 10.90.17.52/31 -> 10.90.17.52/30 -> prefix /30 -> unite!
@@ -336,33 +394,128 @@ class Aggregator:
             return result
 
         previous_net = None
-        for current_net in prefix_list:
+        for current_net in self._prefixes[start_prefix]:
+            if DEBUG:
+                analyze(current_net)
             existing_supernet = find_existing_supernet(current_net)
             if existing_supernet:
+                aggregated(current_net, '---', '---')
                 self._delete_network(current_net)
             elif previous_net is None:
                 previous_net = current_net
             else:
                 # For prefixlen in permissive interval try to find overlapped networks. If they overlap, then combine
                 # into one and immediately break.
-                is_done = False
-                for prefixlen in range(1, self.permissive_prefix + 1):
-                    supernet1 = previous_net.supernet(prefixlen_diff=prefixlen)
-                    supernet2 = current_net.supernet(prefixlen_diff=prefixlen)
+
+                if self.mode & MAX:
+
+                    is_done = False
+                    # Check bound in range 1,31
+                    start = current_net.prefixlen - 1
+                    stop = self.permissive_prefix
+                    if not 0 < start <= 31 or not 0 < stop <= 30:
+                        continue
+
+                    for prefixlen in range(start, stop, -1 ):
+                        supernet1 = previous_net.supernet(new_prefix=prefixlen)
+                        supernet2 = current_net.supernet(new_prefix=prefixlen)
+                        if supernet1 == supernet2:
+                            aggregated(previous_net, current_net, supernet1)
+                            self._add_network(supernet1)
+                            self._delete_network(previous_net, current_net)
+                            previous_net = None
+
+                            is_done = True
+
+                            break
+                        # else:
+                        #    previous_net = current_net
+                    if not is_done:
+                        previous_net = current_net
+                else:
+                    supernet1 = previous_net.supernet(prefixlen_diff=2)
+                    supernet2 = current_net.supernet(prefixlen_diff=2)
                     if supernet1 == supernet2:
+                        aggregated(previous_net, current_net, supernet1)
                         self._add_network(supernet1)
                         self._delete_network(previous_net, current_net)
                         previous_net = None
 
-                        is_done = True
+    def _vertical_aggregation(self, start_prefix: int):
 
-                        break
-                    # else:
-                    #    previous_net = current_net
-                if not is_done:
-                    previous_net = current_net
+        # Make a copy of net keys for looping around it.
+        # network_keys = sorted(self._networks.keys())
+        #
+        # # Take first element in net list. Compare it to others. If it overlaps the other one, then the other
+        # # will be removed.
+        # #
+        # # Example:
+        # # 1 first->192.168.0.0/24, overlaps->192.168.0.23/32, 192.168.0.24/25, 127.0.0.1/32, 8.8.8.8/24
+        # # 2 first->192.168.0.0/24, overlaps->192.168.0.24/25, 127.0.0.1/32, 8.8.8.8/24
+        # # 3 first->192.168.0.0/24, diffirent->127.0.0.1/32, 8.8.8.8/24
+        # # 4 first->192.168.0.0/24, 127.0.0.1/32, different->8.8.8.8/24
+        # # 5 192.168.0.0/24, first->127.0.0.1/32, different->8.8.8.8/24
+        # # 6 192.168.0.0/24, 127.0.0.1/32, first->8.8.8.8/24
+        #
+        # for index, net in enumerate(network_keys):
+        #     for next_net in network_keys[index + 1:]:
+        #         # If current net is the same as next_net
+        #         if net is next_net:
+        #             continue
+        #         # If overlaps then delete from left keys
+        #         if net.overlaps(next_net):
+        #             network_keys.remove(next_net)
+        #
+        # # Clean up from overlapped net
+        # bunch_copy = self._networks.copy()
+        # for net in bunch_copy:
+        #     if net not in network_keys:
+        #         self._networks.pop(net)
+        prefixes = self._prefixes
 
-    def _process_prefixes(self, prefix=0):
+        # For each net with specified prefixes
+        for net in prefixes[start_prefix]:
+
+            if DEBUG:
+                analyze(net)
+
+            # Check if net is arleady processed and deleted
+            if net in self._networks:
+                # Check bound in range 1,31
+                start = start_prefix-1
+                stop = self.swap_prefix
+                if not 0 < start <= 31 or not 0 < stop <= 30:
+                    continue
+
+                # For each prefix less than net has itself
+                for large_prefix in range(start, stop, -1):
+                    # Check if prefix exists
+                    if large_prefix in prefixes:
+                        # For each new with less prefix
+                        for large_net in prefixes[large_prefix]:
+
+                            if self.mode & MAX:
+                                for prefixlen in range(min(large_net.prefixlen, net.prefixlen)-1, stop, -1):
+                                    supernet1 = net.supernet(new_prefix=prefixlen)
+                                    supernet2 = large_net.supernet(new_prefix=prefixlen)
+                                    if supernet1 == supernet2:
+                                        aggregated(net, large_net, supernet1)
+                                        self._add_network(supernet1)
+                                        self._delete_network(net, large_net)
+                                        break
+
+                            else:
+                                # Check if large_net was arleady processed
+                                if large_net in self._networks:
+                                    if large_net.overlaps(net):
+                                        aggregated(net, large_net, large_net)
+                                        self._delete_network(net)
+
+
+
+
+
+    def _process_prefixes(self, stop_prefix=0):
         """Read each list of networks starting with the largest prefixes."""
         prefixes = self._prefixes
 
@@ -392,21 +545,24 @@ class Aggregator:
                         network_keys.remove(next_net)
 
             # Clean up from overlapped net
-            for net in network_keys:
+            bunch_copy = self._networks.copy()
+            for net in bunch_copy:
                 if net not in network_keys:
                     self._networks.pop(net)
 
         # To support both IPv6 and IPv4, start from prefix 128 to 1.
         # Example: 128...32...24...1
-        for x in range(128, prefix, -1):
-            if x in prefixes:
-                self._compare_networks_of_same_prefix_length(sorted(prefixes[x]))
-                print(self._networks)
-                print(len(self._networks))
-                print('')
+        if self.mode & HORIZONTAL_MODE:
+            for x in range(128, stop_prefix, -1):
+                if x in prefixes:
+                    self._horizontal_aggregation(x)
+
 
         # Make clean up on hosts with similar host address but diffirent mask.
-        make_clean_up_after_prefix_process()
+        if self.mode & VERTICAL_MODE:
+            for x in range(128, stop_prefix, -1):
+                if x in prefixes:
+                    self._vertical_aggregation(x)
 
     def aggregate(self, argv):
         # Prepare networks and prefixes
@@ -415,6 +571,29 @@ class Aggregator:
         self._process_prefixes()
         # Return only strings in CIDR format.
         return list(str(net) for net in self._networks)
+
+    def to_csv(self, path='networks.csv'):
+        """
+            Examples:
+                id, label
+                1   127.0.0.1/32
+                2   192.168.0.0/24
+                3   192.168.0.1/32
+                ...
+
+           TODO: make a unit test
+
+        :param path:
+        :return:
+        """
+
+        with open(path,'w+') as file:
+
+            file.write("id,label\n")
+
+            for index, net in enumerate(self.networks):
+                file.write('{},"{}"\n'.format(index,net))
+
 
 
 class Scanner:
@@ -464,7 +643,7 @@ class Scanner:
         :returns: list of str
         """
 
-        return list(self._network_targets)
+        return sorted(self._network_targets)
 
     @property
     def threads(self):
