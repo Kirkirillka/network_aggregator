@@ -15,7 +15,7 @@ from storage_models import NetworkEntry, NETWORK
 from utils import normalize
 from utils import validate_net_data, is_addr, is_network
 
-from logtools import aggregated, analyze
+#from logtools import aggregated, analyze
 
 
 class Hive:
@@ -832,6 +832,15 @@ class MatrixAggregator:
     def __init__(self):
         self._prefixes = {}
 
+
+    @property
+    def networks(self):
+        _return_list = []
+        for value in self._prefixes.values():
+            if value:
+                _return_list.extend(value)
+        return  _return_list
+
     @property
     def permissive_prefix(self):
         if hasattr(self, '_permissive_interval'):
@@ -855,7 +864,7 @@ class MatrixAggregator:
         if hasattr(self, '_swap_interval'):
             return getattr(self, '_swap_interval')
         else:
-            return 1
+            return 24
 
     @swap_prefix.setter
     def swap_prefix(self, value):
@@ -868,6 +877,29 @@ class MatrixAggregator:
             setattr(self, '_swap_interval', value)
         else:
             raise ValueError('Swap prefix must be in {1..31} range.')
+
+    @property
+    def mode(self):
+        """
+        TODO: make a unit test
+        :return:
+        """
+        if hasattr(self, '_mode'):
+            return getattr(self, '_mode')
+        else:
+            return HORIZONTAL_MODE
+
+    @mode.setter
+    def mode(self, value):
+        """
+        TODO: make a unit test
+        :param value:
+        :return:
+        """
+        if isinstance(value, int) and value in range(VERTICAL_MODE + HORIZONTAL_MODE + MAX + 1):
+            setattr(self, '_mode', value)
+        else:
+            raise ValueError('Modes are: VERTICAL_MODE, HORIZONTAL_MODE, MAX')
 
     def upload(self,*args):
         for net in args:
@@ -912,57 +944,111 @@ class MatrixAggregator:
 
     def _horizontal(self,prefix):
 
-        bunch_copy = self._prefixes[prefix] or []
+        while True:
+            is_gone_through = True
+            bunch_copy = self._prefixes[prefix] or []
 
-        if bunch_copy:
-            previous_net = None
-            for current_net in bunch_copy:
-                if "10.90.100" in str(previous_net)  or "10.90.100" in str(current_net) :
-                    print('catch')
+            if bunch_copy:
+                previous_net = None
+                for current_net in bunch_copy:
 
-                existing_supernet = self._find_existing_supernet(current_net)
-                if existing_supernet:
-                    self._delete_network(current_net)
-                elif previous_net is None:
-                    previous_net = current_net
-                else:
-                    # For prefixlen in permissive interval try to find overlapped networks. If they overlap, then combine
-                    # into one and immediately break.
-                    is_done = False
-                    # Check bound in range 1,31
-                    start = current_net.prefixlen - 1
-                    stop = self.permissive_prefix-1
-                    if not 0 < start <= 31 or not 0 < stop <= 30:
-                        continue
-                    for prefixlen in range(start, stop, -1):
-                        supernet1 = previous_net.supernet(new_prefix=prefixlen)
-                        supernet2 = current_net.supernet(new_prefix=prefixlen)
-                        if supernet1 == supernet2:
-                            self._add_network(supernet1)
-                            self._delete_network(previous_net, current_net)
-                            previous_net = None
-                            is_done = True
-                            break
-                        # else:
-                        #    previous_net = current_net
-                    if not is_done:
+                    existing_supernet = self._find_existing_supernet(current_net)
+                    if existing_supernet:
+                        self._delete_network(current_net)
+                        is_gone_through = False
+                    elif previous_net is None:
                         previous_net = current_net
+                    else:
+                        # For prefixlen in permissive interval try to find overlapped networks. If they overlap, then combine
+                        # into one and immediately break.
+                        is_done = False
+                        # Check bound in range 1,31
+                        start = current_net.prefixlen - 1
+                        stop = self.permissive_prefix-1
+                        if not 0 < start <= 31 or not 0 < stop <= 30:
+                            continue
+                        for prefixlen in range(start, stop, -1):
+                            supernet1 = previous_net.supernet(new_prefix=prefixlen)
+                            supernet2 = current_net.supernet(new_prefix=prefixlen)
+                            if supernet1 == supernet2:
+                                self._add_network(supernet1)
+                                self._delete_network(previous_net, current_net)
+                                previous_net = None
+                                is_done = True
+                                is_gone_through = False
+                                break
+                            # else:
+                            #    previous_net = current_net
+                        if not is_done:
+                            previous_net = current_net
+            if is_gone_through:
+                break
+
+    def _vertical(self,prefix):
+
+        while True:
+            is_gone_through = True
+            bunch_copy = self._prefixes[prefix] or []
+
+            # Для каждой записи
+            for net in bunch_copy:
+                is_done = False
+                # Check bound in range 1,31
+                start = net.prefixlen - 1
+                stop = 1
+                if not 0 < start <= 31 or not 0 < stop <= 30:
+                    continue
+
+                existing_network = self._find_existing_supernet(net)
+                if existing_network:
+                    self._delete_network(net)
+                    is_done = True
+                    is_gone_through = False
+                    break
+
+                for prefixlen in range(start, stop, -1):
+                    is_done = False
+                    if prefixlen in self._prefixes:
+                        # Выбрать соседнюю запись с префиксом начиная от префикса записи -1 до 1
+                        for neighboor_net in self._prefixes[prefixlen]:
+                            if neighboor_net.overlaps(net):
+                                self._delete_network(net)
+                                is_done = True
+                                is_gone_through = False
+                                break
+                            elif self.mode & MAX:
+                                for _prefix in range(min(neighboor_net.prefixlen,net.prefixlen)-1,self.swap_prefix-1,-1):
+                                    supernet1 = net.supernet(new_prefix=_prefix)
+                                    supernet2 = neighboor_net.supernet(new_prefix=_prefix)
+                                    if supernet1 == supernet2:
+                                        self._add_network(supernet1)
+                                        self._delete_network(net, neighboor_net)
+                                        is_done = True
+                                        is_gone_through = False
+                                        break
+                                if is_done:
+                                    break
+                            if is_done:
+                                break
+                    if is_done:
+                        break
+            if is_gone_through:
+                break
+
+
 
     def aggregate(self):
         max_prefix = max(self._prefixes.keys())
 
-        for i in range(max_prefix,0,-1):
-            if i in self._prefixes:
-                self._horizontal(i)
+        if self.mode & HORIZONTAL_MODE:
+            for i in range(max_prefix,0,-1):
+                if i in self._prefixes:
+                    self._horizontal(i)
 
-        from pprint import pprint as print
-        print(self._prefixes)
-
-        count = 0
-        for r in self._prefixes:
-            for x in self._prefixes[r]:
-                count+=1
-        print(count)
+        if self.mode & VERTICAL_MODE:
+            for i in range(max_prefix,0,-1):
+                if i in self._prefixes:
+                    self._vertical(i)
 
 
 if __name__ == '__main__':
@@ -972,10 +1058,18 @@ if __name__ == '__main__':
     #networks = ["192.168.0.0/25", "192.168.0.128/25", "10.0.0.0/8", "10.10.0.0/16"]
     networks = []
 
-    with open('/home/hacker/sorted.network') as file:
+    with open('nmap/sorted.network') as file:
+        for net in file:
+            networks.append(net.rsplit('\n')[0])
+
+    with open('nmap/sorted2.network') as file:
         for net in file:
             networks.append(net.rsplit('\n')[0])
 
     aggr.permissive_prefix = 24
+    aggr.swap_prefix = 13
+    aggr.mode = MAX | VERTICAL_MODE | HORIZONTAL_MODE
     aggr.upload(*networks)
     aggr.aggregate()
+
+    print(aggr.networks)
