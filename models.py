@@ -829,6 +829,48 @@ class Scanner:
 
 
 class MatrixAggregator:
+
+    """
+        Class to make aggregation based on "Matrix collapse algorithm".
+
+        Matrix collapse algorithm creation was inspired by https://github.com/grelleum/supernets.git
+        Thank you, Grem Mueller @grlleum for such good aggregation algorithm!
+
+        That consists of four steps:
+
+        1) Data preparation
+            We have a list of networks with different prefixes, e.g.
+                [192.168.0.0/24, 192.168.0.0/25, 192.168.0.128/25, 10.0.0.0/8].
+
+            Then that step transform the list into next dict:
+
+                _prefixes =  {
+                            25: [192.168.0.0/25, 192.168.0.128/25],
+                            24: [192.168.0.0/24,],
+                            8:  [10.0.0.0/8,]
+                            }
+            Thus keys are prefixes and for each prefix the networks with the specified prefix are found
+            and added appended to a list.
+
+            The better way to think about that dict during that aggregation algorithm is to use 2-dimension axes, where
+            X is a list of prefixes in descending order, Y is a list of networks with precified prefix in
+            ascending order (10.0.0.0/8 < 192.168.0.0/24 < 192.168.0.0/25 <- 192.168.0.128/25).
+            So _prefixes is the following:
+
+            -   192.168.0.128/25    -                   -
+            -   192.168.0.0/25      192.168.0.0/24      10.0.0.0/8
+            -   25                  24                  8
+
+
+        2)Finding existing networks which overlaps the current one.
+            So let's suppose we have 192.168.0.0/24 and 192.168.0.0/16 network.
+            We know that 192.168.0.0/24 and 192.168.0.0/16 are not same networks, but
+            192.168.0.0/16 already includes 192.168.0.0/24 so we may skip this.
+
+        3)Horizontal collapse.
+
+
+    """
     def __init__(self):
         self._prefixes = {}
 
@@ -846,7 +888,7 @@ class MatrixAggregator:
         if hasattr(self, '_permissive_interval'):
             return getattr(self, '_permissive_interval')
         else:
-            return 1
+            return 24
 
     @permissive_prefix.setter
     def permissive_prefix(self, value):
@@ -1058,16 +1100,16 @@ if __name__ == '__main__':
     #networks = ["192.168.0.0/25", "192.168.0.128/25", "10.0.0.0/8", "10.10.0.0/16"]
     networks = []
 
-    with open('nmap/sorted.network') as file:
+    with open('tests/networks_samples/net4') as file:
         for net in file:
             networks.append(net.rsplit('\n')[0])
 
-    with open('nmap/sorted2.network') as file:
+    with open('tests/networks_samples/net5') as file:
         for net in file:
             networks.append(net.rsplit('\n')[0])
 
     aggr.permissive_prefix = 24
-    aggr.swap_prefix = 13
+    aggr.swap_prefix = 24
     aggr.mode = MAX | VERTICAL_MODE | HORIZONTAL_MODE
     aggr.upload(*networks)
     aggr.aggregate()
